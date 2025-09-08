@@ -1,6 +1,4 @@
-
 export interface UploadedImage {
-  base64: string;
-  mimeType: string;
-  displayUrl: string;
+  file: File;
+  dataUrl: string;
 }

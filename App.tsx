@@ -1,186 +1,186 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Header } from './components/Header';
 import { Footer } from './components/Footer';
 import { ImageUploader } from './components/ImageUploader';
-import { ResultDisplay } from './components/ResultDisplay';
 import { EditPanel } from './components/EditPanel';
-import { generateSculptureImage, refineSculptureImage } from './services/geminiService';
-import { SCULPTURE_PROMPT, EDIT_PROMPT_PREFIX } from './constants';
-import type { UploadedImage } from './types';
+import { ResultDisplay } from './components/ResultDisplay';
+import { processImage, generateImageFromPrompt } from './services/geminiService';
+import { SCULPTURE_PROMPT, REFINE_PROMPT_TEMPLATE, loadingMessages, RANDOM_ITEM_PROMPTS, RANDOM_IMAGE_PROMPT_TEMPLATE } from './constants';
+import { UploadedImage } from './types';
 
 const App: React.FC = () => {
-  const [uploadedImage, setUploadedImage] = useState<UploadedImage | null>(null);
-  const [generatedImage, setGeneratedImage] = useState<string | null>(null);
+  const [originalImage, setOriginalImage] = useState<UploadedImage | null>(null);
+  const [editedImage, setEditedImage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isEditing, setIsEditing] = useState<boolean>(false);
+  const [isGeneratingRandom, setIsGeneratingRandom] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadingMessage, setLoadingMessage] = useState<string>(loadingMessages[0]);
   
-  const mainContentRef = useRef<HTMLDivElement>(null);
+  const loadingIntervalRef = useRef<number | null>(null);
+  
+  // Effect to clean up the interval timer when the component unmounts.
+  useEffect(() => {
+    return () => {
+      if (loadingIntervalRef.current) {
+        clearInterval(loadingIntervalRef.current);
+      }
+    };
+  }, []);
 
-  const handleImageUpload = useCallback((file: File) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const base64String = reader.result as string;
-      const [header, data] = base64String.split(',');
-      const mimeType = header.match(/:(.*?);/)?.[1] || 'image/png';
-      
-      setUploadedImage({
-        base64: data,
-        mimeType: mimeType,
-        displayUrl: base64String,
-      });
-      setGeneratedImage(null);
-      setError(null);
-    };
-    reader.onerror = () => {
-      setError("Failed to read the image file. Please try again.");
-    };
-    reader.readAsDataURL(file);
+  const stopLoadingSequence = useCallback(() => {
+    setIsLoading(false);
+    setIsEditing(false);
+    if (loadingIntervalRef.current) {
+      clearInterval(loadingIntervalRef.current);
+      loadingIntervalRef.current = null;
+    }
+  }, []);
+
+  const startLoadingSequence = useCallback((editing: boolean = false) => {
+    setIsLoading(true);
+    setIsEditing(editing);
+    if (loadingIntervalRef.current) {
+      clearInterval(loadingIntervalRef.current);
+    }
+    let index = 0;
+    setLoadingMessage(loadingMessages[index]);
+    loadingIntervalRef.current = window.setInterval(() => {
+      index = (index + 1) % loadingMessages.length;
+      setLoadingMessage(loadingMessages[index]);
+    }, 2500);
   }, []);
   
-  const handleGenerate = useCallback(async (imageToUse: UploadedImage) => {
-    if (!imageToUse) {
-      setError("Please upload an image first.");
-      return;
-    }
-
-    setIsLoading(true);
-    setIsEditing(false);
+  const handleClear = useCallback(() => {
+    setOriginalImage(null);
+    setEditedImage(null);
     setError(null);
-    setGeneratedImage(null);
+    stopLoadingSequence();
+  }, [stopLoadingSequence]);
+
+  const handleImageUpload = useCallback(async (file: File) => {
+    const dataUrl = URL.createObjectURL(file);
+    const newImage = { file, dataUrl };
+    
+    setOriginalImage(newImage);
+    setEditedImage(null); // Clear previous edits
+    setError(null);
+    startLoadingSequence();
 
     try {
-      const result = await generateSculptureImage(imageToUse.base64, imageToUse.mimeType, SCULPTURE_PROMPT);
+      const result = await processImage(newImage.file, SCULPTURE_PROMPT);
       if (result) {
-        setGeneratedImage(`data:image/png;base64,${result}`);
+        setEditedImage(`data:image/jpeg;base64,${result}`);
       } else {
         setError("The AI model did not return an image. Please try again.");
       }
     } catch (err) {
       console.error(err);
-      const message = err instanceof Error ? err.message : "An unknown error occurred.";
-      setError(message.replace('Failed to generate image: ', ''));
+      setError(err instanceof Error ? err.message : "An unknown error occurred.");
+      // Clear the image if the initial conversion fails
+      setOriginalImage(null);
     } finally {
-      setIsLoading(false);
+      stopLoadingSequence();
     }
-  }, []);
-
-  const handleRandomImage = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    setGeneratedImage(null);
-    setUploadedImage(null);
-
-    try {
-      const response = await fetch('https://source.unsplash.com/512x512/?portrait,face');
-      if (!response.ok) {
-        throw new Error(`Network response was not ok: ${response.statusText}`);
-      }
-      const blob = await response.blob();
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64String = reader.result as string;
-        const [header, data] = base64String.split(',');
-        const mimeType = header.match(/:(.*?);/)?.[1] || 'image/jpeg';
-        
-        const randomImage: UploadedImage = {
-          base64: data,
-          mimeType: mimeType,
-          displayUrl: base64String,
-        };
-        setUploadedImage(randomImage);
-        handleGenerate(randomImage); 
-      };
-      reader.readAsDataURL(blob);
-    } catch (err) {
-      console.error(err);
-      setError("Failed to fetch a random image. Please try again or upload your own.");
-      setIsLoading(false);
-    }
-  }, [handleGenerate]);
+  }, [startLoadingSequence, stopLoadingSequence]);
 
   const handleRefine = useCallback(async (refinePrompt: string) => {
-    if (!generatedImage) {
-      setError("No generated image to refine.");
+    if (!originalImage) {
+      setError("Please upload an image first.");
       return;
     }
 
-    setIsEditing(true);
     setError(null);
-
-    const [header, data] = generatedImage.split(',');
-    const mimeType = header.match(/:(.*?);/)?.[1] || 'image/png';
-    const fullPrompt = `${EDIT_PROMPT_PREFIX}${refinePrompt}`;
+    startLoadingSequence(true);
 
     try {
-      const result = await refineSculptureImage(data, mimeType, fullPrompt);
+      const prompt = REFINE_PROMPT_TEMPLATE(refinePrompt);
+      const result = await processImage(originalImage.file, prompt);
       if (result) {
-        setGeneratedImage(`data:image/png;base64,${result}`);
+        setEditedImage(`data:image/jpeg;base64,${result}`);
       } else {
-        setError("The AI model did not return a refined image.");
+        setError("The AI model did not return an image for refinement. Please try again.");
       }
     } catch (err) {
       console.error(err);
-      const message = err instanceof Error ? err.message : "An unknown error occurred.";
-      setError(message.replace('Failed to refine image: ', ''));
+      setError(err instanceof Error ? err.message : "An unknown error occurred during refinement.");
     } finally {
-      setIsEditing(false);
+      stopLoadingSequence();
     }
-  }, [generatedImage]);
+  }, [originalImage, startLoadingSequence, stopLoadingSequence]);
+  
+  const base64ToFile = async (dataUrl: string, filename: string): Promise<File> => {
+    const res = await fetch(dataUrl);
+    const blob = await res.blob();
+    return new File([blob], filename, { type: blob.type });
+  };
 
-  const handleScrollToUpload = () => {
-    mainContentRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  const handleRandomImage = useCallback(async () => {
+    handleClear();
+    setIsGeneratingRandom(true);
+    setError(null);
+    try {
+      const item = RANDOM_ITEM_PROMPTS[Math.floor(Math.random() * RANDOM_ITEM_PROMPTS.length)];
+      const prompt = RANDOM_IMAGE_PROMPT_TEMPLATE(item);
+      const generatedImageBase64 = await generateImageFromPrompt(prompt);
+      if (!generatedImageBase64) {
+        throw new Error("Failed to generate a random image.");
+      }
+
+      setIsGeneratingRandom(false);
+      
+      const mimeType = 'image/jpeg';
+      const imageDataUrl = `data:${mimeType};base64,${generatedImageBase64}`;
+      const imageFile = await base64ToFile(imageDataUrl, 'random-portrait.jpg');
+      
+      await handleImageUpload(imageFile);
+
+    } catch (err) {
+      console.error(err);
+      setError(err instanceof Error ? err.message : "Failed to generate a random portrait.");
+      setIsGeneratingRandom(false);
+    }
+  }, [handleClear, handleImageUpload]);
+
+
+  // Scroll to the main content area when the "Get Started" button is clicked.
+  const mainContentRef = useRef<HTMLDivElement>(null);
+  const handleGetStartedClick = () => {
+    mainContentRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
   return (
     <div className="flex flex-col min-h-screen">
-      <Header onGetStartedClick={handleScrollToUpload} />
+      <Header onGetStartedClick={handleGetStartedClick} />
       <main ref={mainContentRef} className="flex-grow container mx-auto px-6 py-12">
-        <div className="max-w-4xl mx-auto">
-          <div className="text-center mb-12">
-            <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-gray-900 leading-tight">Transform Your Images into Marble Masterpieces</h1>
-            <p className="mt-4 text-lg text-gray-600">Our AI-powered tool converts your photos into breathtaking, photorealistic marble sculptures with stunning detail and elegance.</p>
+        <div className="text-center mb-12">
+          <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-gray-900 leading-tight">Bring Your Photos to Life in Marble</h1>
+          <p className="mt-4 text-lg text-gray-600 max-w-2xl mx-auto">Upload an image and watch as our AI transforms it into a timeless, classical-style marble sculpture.</p>
+        </div>
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 lg:gap-12 items-start">
+          <div className="space-y-6">
+            <ImageUploader 
+              onImageUpload={handleImageUpload} 
+              onClear={handleClear} 
+              displayUrl={originalImage?.dataUrl ?? null} 
+              onGenerateRandom={handleRandomImage}
+              isGeneratingRandom={isGeneratingRandom}
+              isDisabled={isLoading || isGeneratingRandom}
+            />
+            {originalImage && (
+              <EditPanel onRefine={handleRefine} isEditing={isLoading} />
+            )}
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
-            <div className="space-y-6">
-              <ImageUploader onImageUpload={handleImageUpload} displayUrl={uploadedImage?.displayUrl ?? null} />
-              <div className="flex flex-col sm:flex-row gap-4">
-                <button
-                  onClick={() => handleGenerate(uploadedImage!)}
-                  disabled={!uploadedImage || isLoading || isEditing}
-                  className="w-full bg-[var(--primary-color)] text-white font-bold py-3 px-4 rounded-lg text-lg hover:opacity-90 transition-opacity flex items-center justify-center gap-2 disabled:bg-opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isLoading && !isEditing ? (
-                    <>
-                      <svg className="animate-spin h-5 w-5" xmlns="http://www.w.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                      </svg>
-                      <span>Converting...</span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="material-symbols-outlined">auto_awesome</span>
-                      <span>Convert to Sculpture</span>
-                    </>
-                  )}
-                </button>
-                 <button
-                  onClick={handleRandomImage}
-                  disabled={isLoading || isEditing}
-                  className="w-full sm:w-auto bg-gray-800 text-white font-bold py-3 px-6 rounded-lg text-lg hover:bg-gray-900 transition-colors flex items-center justify-center gap-2 disabled:bg-opacity-50 disabled:cursor-not-allowed"
-                >
-                  <span className="material-symbols-outlined">casino</span>
-                  <span>Random</span>
-                </button>
-              </div>
-            </div>
-            <div className="space-y-4">
-              <ResultDisplay isLoading={isLoading} isEditing={isEditing} generatedImage={generatedImage} error={error} />
-              {generatedImage && !isLoading && !isEditing && !error && (
-                <EditPanel onRefine={handleRefine} isEditing={isEditing} />
-              )}
-            </div>
+          <div className="md:sticky md:top-28">
+            <ResultDisplay
+              isLoading={isLoading}
+              isEditing={isEditing}
+              loadingMessage={loadingMessage}
+              originalImage={originalImage?.dataUrl ?? null}
+              editedImage={editedImage}
+              error={error}
+            />
           </div>
         </div>
       </main>
