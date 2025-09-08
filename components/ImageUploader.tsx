@@ -91,7 +91,10 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({ onImageUpload, onC
                 <div className="flex-grow border-t border-gray-300"></div>
             </div>
             <button
-                onClick={onGenerateRandom}
+                onClick={(e) => { 
+                  e.stopPropagation();
+                  onGenerateRandom(); 
+                }}
                 disabled={isDisabled}
                 className="bg-gray-700 text-white font-semibold py-2 px-4 rounded-md text-sm hover:bg-gray-800 transition-colors flex items-center justify-center gap-2 disabled:bg-opacity-50 disabled:cursor-not-allowed"
             >
