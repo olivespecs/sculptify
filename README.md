@@ -1,5 +1,5 @@
 <div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/cde36e78-4085-45c3-a2b4-86185bf91cee" />
+<img alt="Sculptify" src="https://github.com/user-attachments/assets/cde36e78-4085-45c3-a2b4-86185bf91cee" />
 </div>
 
 # Run and deploy your AI Studio app
